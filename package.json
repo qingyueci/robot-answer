@@ -1,0 +1,22 @@
+{
+  "name": "home-robot",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @home-robot/web",
+    "build": "npm run build --workspace @home-robot/web",
+    "typecheck": "npm run typecheck --workspace @home-robot/web",
+    "test:persona": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/persona-regression.mjs",
+    "test:recall": "node --no-warnings scripts/recall-ranking-regression.mjs",
+    "memory:nightly": "node scripts/nightly-memory-worker.mjs --run-once"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "2.1.10"
+  }
+}

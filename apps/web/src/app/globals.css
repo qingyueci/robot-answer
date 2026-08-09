@@ -1,0 +1,74 @@
+:root {
+  color-scheme: light;
+  --canvas: #e9e4da;
+  --paper: #f4f1e9;
+  --paper-deep: #e8e1d5;
+  --paper-light: #fbfaf6;
+  --paper-raised: #fffdf8;
+  --ink: #211e1a;
+  --muted: #69635b;
+  --quiet: #928b81;
+  --rule: rgba(45, 39, 32, 0.1);
+  --rule-strong: rgba(45, 39, 32, 0.16);
+  --accent: #b44735;
+  --accent-hover: #963a2b;
+  --accent-soft: rgba(180, 71, 53, 0.1);
+  --error: #9c2f27;
+  --success: #71856a;
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --shadow-soft: 0 8px 24px rgba(58, 47, 35, 0.055);
+  --shadow-panel: 0 18px 54px rgba(58, 47, 35, 0.075);
+  --shadow-focus: 0 0 0 3px rgba(180, 71, 53, 0.13);
+  --font-display: "STKaiti", "KaiTi", "FangSong", "Songti SC", serif;
+  --font-serif: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
+  --font-sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+::selection {
+  color: var(--paper-light);
+  background: var(--accent);
+}

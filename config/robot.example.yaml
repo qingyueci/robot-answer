@@ -1,0 +1,63 @@
+# Home Robot 可提交的配置模板。真实值请只写入被 Git 忽略的 config/robot.yaml。
+schema_version: 1
+
+scope:
+  project_root: "${ROBOT_PROJECT_ROOT}"
+  isolated_from_other_projects: true
+
+identity:
+  name: Home Robot
+  gender_presentation: female
+  user_address: 用户
+
+relationship:
+  type: romantic_partner
+  state: established
+  state_database: "${ROBOT_STATE_DB_PATH}"
+  gamification: false
+
+memory:
+  provider: mem0_oss
+  enabled: true
+  storage:
+    vector_database: qdrant_local
+    qdrant_url: "http://127.0.0.1:6333"
+    qdrant_collection: home_robot_memories
+    history_database: "${ROBOT_MEM0_HISTORY_DB_PATH}"
+    candidate_database: "${ROBOT_MEMORY_DB_PATH}"
+  embedding:
+    provider: ollama_local
+    model: nomic-embed-text-v2-moe
+    dimensions: 768
+    url: "http://127.0.0.1:11434"
+
+model:
+  provider: openai_compatible
+  api_key_environment_variable: ROBOT_CHAT_API_KEY
+  base_url_environment_variable: ROBOT_CHAT_BASE_URL
+  model_environment_variable: ROBOT_CHAT_MODEL
+  request_timeout_ms: 45000
+
+deployment:
+  privacy_mode: hybrid
+  knowledge_database: local
+  vector_store: local
+  conversation_store:
+    provider: supabase
+    anonymous_auth: true
+    project_ref_environment_variable: SUPABASE_PROJECT_REF
+
+backup:
+  enabled: true
+  encrypted: true
+  path: "${ROBOT_BACKUP_PATH}"
+  key_environment_variable: ROBOT_BACKUP_KEY
+
+interface:
+  desktop_pet:
+    enabled: true
+    package_target: "${CODEX_HOME}/pets/home-robot"
+
+voice:
+  enabled: false
+  status: deferred

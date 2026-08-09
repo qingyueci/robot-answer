@@ -1,0 +1,528 @@
+.page {
+  min-height: 100dvh;
+  padding: 0 32px 80px;
+  background: var(--paper);
+}
+
+.shell {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+}
+
+.stickyHead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding-top: 1px;
+  background: rgba(244, 240, 230, 0.96);
+  backdrop-filter: blur(14px);
+}
+
+.header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 48px;
+  padding: 46px 0 28px;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+}
+
+.header h1 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: clamp(34px, 4vw, 54px);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+
+.header > div > p:last-child {
+  max-width: 620px;
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.header nav {
+  display: flex;
+  align-items: center;
+  gap: 34px;
+  font-family: var(--font-serif);
+  font-size: 16px;
+}
+
+.header nav a,
+.header nav span {
+  position: relative;
+  padding: 11px 0;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.header nav a:hover {
+  color: var(--ink);
+}
+
+.header nav span {
+  color: var(--accent);
+}
+
+.header nav span::after {
+  position: absolute;
+  right: 0;
+  bottom: -29px;
+  left: 0;
+  height: 2px;
+  background: var(--accent);
+  content: "";
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.filters button {
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font-size: 13px;
+}
+
+.filters button:hover {
+  color: var(--ink);
+  border-color: var(--rule);
+}
+
+.filters .activeFilter {
+  color: var(--paper-light);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.governanceBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+  margin: 28px 0 8px;
+  padding: 14px 0;
+  border-top: 1px solid var(--rule-strong);
+  border-bottom: 1px solid var(--rule-strong);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.governanceBar button {
+  margin-left: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: transparent;
+}
+
+.governanceBar button:hover:not(:disabled) {
+  color: var(--paper-light);
+  background: var(--accent);
+}
+
+.error,
+.empty {
+  margin: 28px 0 0;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--font-serif);
+  line-height: 1.8;
+}
+
+.error {
+  color: var(--error);
+}
+
+.list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 42px;
+  margin-top: 24px;
+}
+
+.card {
+  min-width: 0;
+  padding: 24px 0 28px;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.memoryText {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.85;
+}
+
+.governanceBar strong {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.meta span:first-child {
+  color: var(--accent);
+}
+
+.sensitive {
+  color: var(--error) !important;
+}
+
+.editor {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  outline: 0;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.28);
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.editor:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.actions button {
+  padding: 8px 11px;
+  border: 1px solid var(--rule-strong);
+  background: transparent;
+  font-size: 12px;
+}
+
+.primaryButton {
+  color: var(--paper-light);
+  border-color: var(--accent) !important;
+  background: var(--accent) !important;
+}
+
+.quietButton {
+  color: var(--muted);
+}
+
+.dangerButton {
+  color: var(--error);
+  border-color: rgba(156, 47, 39, 0.34) !important;
+}
+
+.actions button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.actions button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.actions button:disabled,
+.governanceBar button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.source {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.source summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.source pre {
+  overflow-x: auto;
+  padding: 12px 0 0;
+  font-family: var(--font-serif);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.governanceReason {
+  margin: 14px 0 0;
+  color: var(--quiet);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+/* Craft polish */
+.page {
+  padding: 16px 24px 72px;
+  background: var(--canvas);
+}
+
+.shell {
+  width: min(1160px, 100%);
+  padding: 0 32px 36px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--paper-light);
+  box-shadow: var(--shadow-panel);
+}
+
+.stickyHead {
+  top: 0;
+  margin: 0 -32px;
+  padding: 0 32px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: rgba(251, 250, 246, 0.92);
+}
+
+.header {
+  gap: 32px;
+  padding: 34px 0 24px;
+  border-bottom-color: var(--rule);
+}
+
+.header h1 {
+  font-size: clamp(32px, 3.6vw, 48px);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.header > div > p:last-child {
+  margin-top: 12px;
+  line-height: 1.7;
+}
+
+.header nav {
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: rgba(45, 39, 32, 0.028);
+  font-size: 14px;
+}
+
+.header nav a,
+.header nav span {
+  padding: 8px 12px;
+  border-radius: 9px;
+}
+
+.header nav a:hover {
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.header nav span {
+  background: var(--paper-raised);
+  box-shadow: 0 1px 6px rgba(58, 47, 35, 0.08);
+}
+
+.header nav span::after {
+  display: none;
+}
+
+.filters {
+  gap: 4px;
+  padding: 14px 0;
+  border-bottom-color: var(--rule);
+}
+
+.filters button {
+  padding: 8px 13px;
+  border-radius: 9px;
+}
+
+.filters button:hover {
+  border-color: transparent;
+  background: rgba(45, 39, 32, 0.045);
+}
+
+.filters .activeFilter {
+  border-color: rgba(180, 71, 53, 0.16);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.governanceBar {
+  gap: 10px 18px;
+  margin: 24px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: rgba(45, 39, 32, 0.025);
+}
+
+.list {
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.card {
+  padding: 20px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--paper-raised);
+  box-shadow: var(--shadow-soft);
+}
+
+.meta {
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.meta span {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: rgba(45, 39, 32, 0.045);
+}
+
+.meta span:first-child {
+  background: var(--accent-soft);
+}
+
+.memoryText {
+  font-size: 15px;
+  line-height: 1.78;
+}
+
+.source {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top-color: var(--rule);
+}
+
+.source pre {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius-xs);
+  background: rgba(45, 39, 32, 0.035);
+}
+
+.governanceReason {
+  margin-top: 14px;
+  padding: 9px 11px;
+  border-radius: var(--radius-xs);
+  background: rgba(45, 39, 32, 0.035);
+}
+
+.empty,
+.error {
+  padding: 22px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 8px 8px 48px;
+  }
+
+  .shell {
+    padding: 0 18px 24px;
+    border-radius: 18px;
+  }
+
+  .stickyHead {
+    margin: 0 -18px;
+    padding: 0 18px;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .header {
+    align-items: start;
+    gap: 20px;
+    padding-top: 26px;
+  }
+
+  .header nav {
+    width: fit-content;
+  }
+
+  .list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .page {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .header {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding-top: 30px;
+  }
+
+  .header nav {
+    gap: 28px;
+  }
+
+  .header nav span::after {
+    bottom: -29px;
+  }
+
+  .list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 540px) {
+  .page {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .header h1 {
+    font-size: 36px;
+  }
+
+  .filters {
+    overflow-x: auto;
+  }
+
+  .filters button {
+    flex: 0 0 auto;
+  }
+
+  .governanceBar button {
+    width: 100%;
+    margin-left: 0;
+  }
+}
