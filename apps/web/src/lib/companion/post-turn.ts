@@ -9,6 +9,7 @@ import {
   getMemoryRecordByMem0Id,
   markMemoryConfirmed,
   rejectMemoryRecord,
+  setMemoryGovernanceReason,
   softDeleteMemoryRecord,
   updateMemoryRecord,
 } from "@/lib/memory/local-store";
@@ -20,8 +21,10 @@ import {
 } from "@/lib/memory/service";
 import { MEMORY_CATEGORIES, type MemoryCategory } from "@/lib/memory/types";
 import {
+  conflictsWithCurrentFactCorrection,
   isTrivialUserTurn,
   looksContradictory,
+  reflectsCurrentFactCorrection,
 } from "@/lib/governance/text";
 import {
   completeOpenTopicByContent,
@@ -144,14 +147,26 @@ function parseMemories(value: unknown): MemoryCandidateOut[] {
   return output;
 }
 
-function parseJournal(value: unknown): JournalCandidateOut | null {
+export function parseJournalCandidate(value: unknown): JournalCandidateOut | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const summary =
     typeof record.summary === "string" ? record.summary.trim().slice(0, 800) : "";
+  const mood =
+    typeof record.mood === "string" ? record.mood.trim().slice(0, 40) : "";
   const worthSaving = Boolean(record.worthSaving);
-  // 不值得保存、或声称值得却没有实质内容，都不形成日记候选。
-  if (!worthSaving || !summary) return null;
+  // mood-only 不是日记，但必须继续进入短期 emotion_state。
+  if (!worthSaving || !summary) {
+    return mood
+      ? {
+          worthSaving: false,
+          title: "",
+          summary: "",
+          mood,
+          important: false,
+        }
+      : null;
+  }
   return {
     worthSaving: true,
     title:
@@ -159,8 +174,7 @@ function parseJournal(value: unknown): JournalCandidateOut | null {
         ? record.title.trim().slice(0, 16)
         : "今天的片段",
     summary,
-    mood:
-      typeof record.mood === "string" ? record.mood.trim().slice(0, 40) : "",
+    mood,
     important: Boolean(record.important),
   };
 }
@@ -210,7 +224,7 @@ function parseExtraction(text: string): PostTurnExtraction | null {
   const record = parsed as Record<string, unknown>;
   return {
     memories: parseMemories(record.memories),
-    journal: parseJournal(record.journal),
+    journal: parseJournalCandidate(record.journal),
     openTopics: parseOpenTopics(record.openTopics),
     relationshipEvent: parseRelationshipEvent(record.relationshipEvent),
     turnSummary:
@@ -291,7 +305,7 @@ export async function applyPostTurnExtraction(input: {
 }): Promise<ApplyPostTurnResult> {
   const { extraction, conversationId, turnId, sourceExcerpt, userText } = input;
   let confirmed = 0;
-  const candidates = 0;
+  let candidates = 0;
 
   for (const item of extraction.memories) {
     try {
@@ -324,8 +338,25 @@ export async function applyPostTurnExtraction(input: {
         !record.aboutThirdParty &&
         record.confidence >= RETENTION_THRESHOLD[record.category];
 
-      // 候选不会留给页面处理：API 当轮完成保留或忽略决定。
+      // API 当轮决定确认、忽略，或把需要更多证据的内容保留为候选。
       if (record.status !== "candidate") {
+        continue;
+      }
+      // 性格推断即使分数很高也只是模型假设，等待后续用户证据或人工确认。
+      if (record.category === "personality_inference") {
+        setMemoryGovernanceReason(
+          record.id,
+          "模型性格推断，等待后续证据确认",
+        );
+        candidates += 1;
+        continue;
+      }
+      if (reflectsCurrentFactCorrection(record.content, userText)) {
+        setMemoryGovernanceReason(
+          record.id,
+          "用户本轮纠正旧事实，等待冲突被确认",
+        );
+        candidates += 1;
         continue;
       }
       if (!shouldRetain) {
@@ -339,11 +370,15 @@ export async function applyPostTurnExtraction(input: {
       // 语义去重：已有高度相似的 confirmed 记忆时，更新旧记录或跳过。
       const similar = await findSimilarConfirmedMemory(record.content);
       if (similar) {
-        if (looksContradictory(similar.memory, record.content)) {
-          rejectMemoryRecord(
+        if (
+          looksContradictory(similar.memory, record.content) ||
+          conflictsWithCurrentFactCorrection(similar.memory, userText)
+        ) {
+          setMemoryGovernanceReason(
             record.id,
-            "API 检测到与已有记忆冲突，保留原记录",
+            "与已有记忆冲突，等待当前事实被确认",
           );
+          candidates += 1;
           continue;
         }
         if (record.content.length > similar.memory.length) {
@@ -370,9 +405,11 @@ export async function applyPostTurnExtraction(input: {
 
       try {
         const mem0Id = await addConfirmedMemory(record.content, record.category, {
+          localMemoryId: record.id,
           sourceConversationId: record.sourceConversationId,
           sourceExcerpt: record.sourceExcerpt,
           confidence: record.confidence,
+          updatedAt: record.updatedAt,
           expiresAt: record.expiresAt,
           sensitive: record.sensitive,
           aboutThirdParty: record.aboutThirdParty,

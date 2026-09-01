@@ -9,6 +9,7 @@ import {
 } from "@/lib/companion/post-turn";
 import { isTrivialUserTurn } from "@/lib/governance/text";
 import { runAutomaticGovernance } from "@/lib/governance/automatic";
+import { reconcileCurrentFactCorrection } from "@/lib/memory/reconciliation";
 
 export const runtime = "nodejs";
 
@@ -186,10 +187,16 @@ export async function POST(request: Request) {
       return Response.json(skipped);
     }
 
+    // 用户原文中的“不是 X，是 Y”直接进行确定性本地纠正，不依赖模型提取。
+    const reconciliation = await reconcileCurrentFactCorrection({
+      userText: lastUserText,
+      conversationId,
+    });
+
     const extraction = await runPostTurnExtraction(lines);
     if (!extraction) {
       // 模型不可用或失败：绝不自动生成日记兜底。
-      const failed = { ok: false, status: "failed" };
+      const failed = { ok: false, status: "failed", reconciliation };
       recordProcessedTurn(turnId, "failed", failed);
       return Response.json(failed);
     }
@@ -220,6 +227,7 @@ export async function POST(request: Request) {
       confirmed: applied.confirmed,
       candidates: applied.candidates,
       journalSaved: applied.journalSaved,
+      reconciliation,
       governed: governed.result,
     };
     recordProcessedTurn(turnId, "completed", completed);

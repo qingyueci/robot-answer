@@ -609,3 +609,53 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Moonlit paper component geometry */
+.shell {
+  border-radius: var(--radius-lg);
+}
+
+.header nav {
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.header nav a,
+.header nav span {
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: var(--radius-xs);
+}
+
+.relationship,
+.section,
+.entry,
+.empty,
+.error {
+  border-radius: var(--radius-md);
+}
+
+.topic,
+.finished,
+.composer {
+  border-radius: var(--radius-sm);
+}
+
+.apiBadge,
+.governanceButton,
+.primaryButton,
+.quietButton,
+.deleteButton,
+.finished button,
+.composer input,
+.composer textarea {
+  min-height: 36px;
+  border-radius: var(--radius-xs);
+}
+
+.governanceButton:active:not(:disabled),
+.primaryButton:active:not(:disabled),
+.quietButton:active:not(:disabled),
+.deleteButton:active:not(:disabled) {
+  transform: scale(0.97);
+}

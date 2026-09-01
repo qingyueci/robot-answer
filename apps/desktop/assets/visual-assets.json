@@ -1,0 +1,51 @@
+{
+  "formatVersion": 1,
+  "generatedAt": "2026-08-20T11:07:12.773Z",
+  "iconSizes": [
+    16,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256
+  ],
+  "outputs": [
+    {
+      "path": "apps/desktop/assets/home-robot.png",
+      "bytes": 1570861,
+      "sha256": "ccd6a8d9160532420bb5c338bc61770c808e77e86b85f78de0affcbbf60d693d",
+      "format": "png",
+      "width": 1024,
+      "height": 1024,
+      "pages": 1
+    },
+    {
+      "path": "apps/desktop/assets/home-robot.ico",
+      "bytes": 127619,
+      "sha256": "f7625bdad04f9f4ad89f86ac4775be5aa30e76a34bdd52e94e3ef5795b8c9d02",
+      "format": "ico",
+      "width": 256,
+      "height": 256,
+      "pages": 7
+    },
+    {
+      "path": "apps/desktop/assets/splash-paper-background.webp",
+      "bytes": 8894,
+      "sha256": "ffe3f2d6e3f3cbd8f319b5baadd57b3517dd7ca4dd78ffc53b47c6e46a703beb",
+      "format": "webp",
+      "width": 960,
+      "height": 540,
+      "pages": 1
+    },
+    {
+      "path": "apps/desktop/assets/installer-loading.gif",
+      "bytes": 10521,
+      "sha256": "e8b1bb4f99259567452d86a5de876b27f1c875ac8b451c924cece45312b3ef84",
+      "format": "gif",
+      "width": 268,
+      "height": 167,
+      "pages": 1
+    }
+  ]
+}

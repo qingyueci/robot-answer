@@ -27,6 +27,10 @@ data/state/
 .workbuddy/
 artifacts/
 home-robot/
+apps/desktop/out/
+apps/desktop/runtime/
+apps/desktop/.forge-temp/
+apps/desktop/.squirrel-temp/
 config/robot.yaml
 docs/CHAT_STYLE_FINDINGS.md
 docs/INTERACTION_MATERIAL.md

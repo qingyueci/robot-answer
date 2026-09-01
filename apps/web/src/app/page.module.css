@@ -789,10 +789,10 @@
 }
 
 .brand h1 {
-  font-size: 34px;
+  font-size: 27px;
   font-weight: 650;
-  letter-spacing: 0.12em;
-  line-height: 0.98;
+  letter-spacing: 0.075em;
+  line-height: 1.08;
 }
 
 .brand p {
@@ -1433,4 +1433,150 @@
 .bubble,
 .reasoning div {
   letter-spacing: 0.012em;
+}
+
+/* Moonlit paper — one native window surface, then quiet internal dividers. */
+.page {
+  display: block;
+  padding: 12px;
+  background: var(--canvas);
+}
+
+.appFrame {
+  width: 100%;
+  height: calc(100dvh - 24px);
+  display: grid;
+  grid-template-columns: 304px minmax(0, 1fr) 276px;
+  overflow: hidden;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper-light);
+  box-shadow: var(--shadow-panel);
+}
+
+.sidebar,
+.chatPane,
+.contextPanel {
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.sidebar {
+  border-right: 1px solid var(--rule);
+}
+
+.chatPane {
+  border-right: 1px solid var(--rule);
+}
+
+.contextPanel section {
+  padding: 18px 8px 22px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+}
+
+.contextPanel section + section {
+  margin-top: 0;
+  padding-top: 22px;
+}
+
+.navigation {
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.navigation a,
+.navigation span {
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: var(--radius-xs);
+}
+
+.newConversation,
+.sessionItem,
+.sessionItem input,
+.sessionItem form button {
+  border-radius: var(--radius-sm);
+}
+
+.welcome,
+.message,
+.composerArea {
+  border-radius: var(--radius-md);
+}
+
+.composer {
+  border-radius: var(--radius-sm);
+}
+
+.sendButton {
+  border-radius: var(--radius-sm);
+}
+
+.messageAssistant .bubble,
+.typingBubble {
+  border-radius: 4px var(--radius-md) var(--radius-md) var(--radius-md);
+}
+
+.messageUser .bubble {
+  border-radius: var(--radius-md) 4px var(--radius-md) var(--radius-md);
+}
+
+.reasoning {
+  border-radius: 4px var(--radius-sm) var(--radius-sm) 4px;
+}
+
+.sessionActions button,
+.closeSidebar,
+.replyFeedback,
+.errorRow button,
+.journalLink {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: var(--radius-xs);
+}
+
+.sessionActions button:active,
+.closeSidebar:active,
+.replyFeedback:active,
+.journalLink:active {
+  transform: scale(0.97);
+}
+
+@media (max-width: 1180px) {
+  .appFrame {
+    grid-template-columns: 288px minmax(0, 1fr);
+  }
+
+  .chatPane {
+    border-right: 0;
+  }
+}
+
+@media (max-width: 820px) {
+  .page {
+    padding: 8px;
+  }
+
+  .appFrame {
+    height: calc(100dvh - 16px);
+    grid-template-columns: minmax(0, 1fr);
+    border-radius: 16px;
+  }
+
+  .chatPane {
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .sidebar {
+    height: calc(100dvh - 16px);
+    border: 1px solid var(--rule-strong);
+    border-radius: 16px;
+    box-shadow: 18px 0 44px rgba(52, 42, 29, 0.18);
+  }
 }

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'" />
+    <meta name="color-scheme" content="light" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Home Robot 正在载入</title>
+    <style>
+      :root {
+        --paper: #f7f4ed;
+        --paper-raised: #fffdf8;
+        --ink: #282521;
+        --muted: #777168;
+        --rule: rgba(45, 39, 32, 0.13);
+        --accent: #b44735;
+      }
+
+      * { box-sizing: border-box; }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        color: var(--ink);
+        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
+
+      body {
+        display: grid;
+        padding: 16px;
+        place-items: stretch;
+      }
+
+      .splash {
+        position: relative;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        border: 1px solid var(--rule);
+        border-radius: 22px;
+        background: var(--paper) url("../assets/splash-paper-background.webp") center / cover no-repeat;
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.5) inset,
+          0 24px 70px rgba(48, 42, 34, 0.2);
+      }
+
+      .content {
+        position: relative;
+        z-index: 1;
+        width: min(360px, calc(100% - 64px));
+        margin-top: -10px;
+        text-align: center;
+      }
+
+      .mark {
+        width: 58px;
+        height: 58px;
+        margin: 0 auto 14px;
+        border: 1px solid rgba(45, 39, 32, 0.14);
+        border-radius: 14px;
+        box-shadow: 0 7px 20px rgba(48, 42, 34, 0.12);
+      }
+
+      h1 {
+        margin: 0;
+        font-family: "Songti SC", "STSong", "SimSun", serif;
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: 0.025em;
+      }
+
+      #status {
+        min-height: 20px;
+        margin: 9px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.02em;
+      }
+
+      .progress {
+        position: relative;
+        height: 2px;
+        margin-top: 19px;
+        overflow: hidden;
+        border-radius: 2px;
+        background: rgba(45, 39, 32, 0.09);
+      }
+
+      .progress::after {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 32%;
+        border-radius: inherit;
+        background: var(--accent);
+        content: "";
+        animation: travel 1.65s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+      }
+
+      @keyframes travel {
+        0% { opacity: 0; transform: translateX(-105%); }
+        18% { opacity: 1; }
+        82% { opacity: 1; }
+        100% { opacity: 0; transform: translateX(415%); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .progress::after { animation: none; transform: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="splash" aria-label="Home Robot 正在载入">
+      <div class="content">
+        <img class="mark" src="../assets/home-robot.png" alt="" />
+        <h1>Home Robot</h1>
+        <p id="status" aria-live="polite">正在准备桌面环境…</p>
+        <div class="progress" aria-hidden="true"></div>
+      </div>
+    </main>
+  </body>
+</html>

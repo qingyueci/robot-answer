@@ -17,7 +17,12 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AUTO_TOPIC_DELAY_MS,
+  canSendProactiveCandidate,
+  postTurnThreadState,
+  readPersistedRobotPolicy,
   shouldScheduleAutoTopic,
+  type ProactiveThreadState,
+  withPersistedRobotPolicy,
 } from "@/lib/companion/state-policy";
 import {
   createChatConversation,
@@ -36,7 +41,19 @@ type StorageStatus = "starting" | "local" | "ready" | "saving" | "error";
 type MemoryStatus = "idle" | "working" | "updated" | "candidate" | "offline";
 type FeedbackStatus = "saving" | "saved" | "error";
 
+type ProactiveCandidate = {
+  kind: "auto-topic" | "due-follow-up";
+  topicId: string | null;
+  topicUpdatedAt: string | null;
+  topicFollowUpCount: number | null;
+  text: string;
+  generatedAt: string;
+  conversationId: string | null;
+  basedOnMessageId: string | null;
+};
+
 const REASONING_STYLE_CACHE_KEY = "robot.home-robot.reasoning-style.v1";
+const PROACTIVE_ACTIVITY_CHANNEL = "robot.home-robot.proactive-activity.v1";
 
 function readReasoningStyleCache() {
   try {
@@ -71,11 +88,9 @@ function reasoningText(parts: Array<{ type: string; text?: string }>) {
 
 function messageBubbleTexts(message: UIMessage, text: string) {
   if (!text) return [];
-  const metadata = message.metadata as
-    | { bubbleLayout?: "single" | "split" }
-    | undefined;
+  const policy = readPersistedRobotPolicy(message);
   const hasDeepReasoning = message.parts.some((part) => part.type === "reasoning");
-  if (metadata?.bubbleLayout === "single" || hasDeepReasoning) return [text];
+  if (policy?.bubbleLayout === "single" || hasDeepReasoning) return [text];
 
   const bubbles = text
     .split(/\n+/)
@@ -88,6 +103,34 @@ function displayConversationTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+}
+
+function messageThreadState(
+  message: UIMessage | undefined,
+  userText = "",
+): ProactiveThreadState {
+  const policy = readPersistedRobotPolicy(message);
+  if (
+    policy?.threadState === "active" ||
+    policy?.threadState === "open" ||
+    policy?.threadState === "settled" ||
+    policy?.threadState === "departing"
+  ) {
+    return postTurnThreadState({
+      declaredState: policy.threadState,
+      conversationMove: policy.conversationMove,
+      assistantText: message ? messageText(message.parts) : "",
+      hasDeepReasoning: Boolean(
+        message?.parts.some((part) => part.type === "reasoning"),
+      ),
+    });
+  }
+  if (/晚安|睡了|去忙|先忙|不聊了|下次再聊|回头再聊|先这样/.test(userText)) {
+    return "departing";
+  }
+  return /[？?]\s*$/.test(message ? messageText(message.parts) : "")
+    ? "active"
+    : "settled";
 }
 
 export default function ChatPage() {
@@ -116,6 +159,11 @@ export default function ChatPage() {
   const reasoningStyleReadyRef = useRef(false);
   const reasoningStyleRequestedRef = useRef(new Set<string>());
   const autoTopicTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const proactiveAbortRef = useRef<AbortController | null>(null);
+  const proactiveActivityChannelRef = useRef<BroadcastChannel | null>(null);
+  const activityEpochRef = useRef(0);
+  const busyRef = useRef(false);
+  const mountedRef = useRef(true);
   const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null);
 
   const clearAutoTopicTimer = useCallback(() => {
@@ -124,6 +172,35 @@ export default function ChatPage() {
       autoTopicTimerRef.current = null;
     }
   }, []);
+
+  const invalidateProactive = useCallback(() => {
+    activityEpochRef.current += 1;
+    clearAutoTopicTimer();
+    proactiveAbortRef.current?.abort();
+    proactiveAbortRef.current = null;
+  }, [clearAutoTopicTimer]);
+
+  const announceUserActivity = useCallback(() => {
+    proactiveActivityChannelRef.current?.postMessage({ type: "user-activity" });
+  }, []);
+
+  async function registerServerActivity() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3_000);
+    try {
+      const response = await fetch("/api/follow-up", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "activity" }),
+        signal: controller.signal,
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 
   if (!transportRef.current) {
     transportRef.current = new DefaultChatTransport<UIMessage>({
@@ -158,11 +235,13 @@ export default function ChatPage() {
       setStorageStatus((current) => (current === "saving" ? "error" : current));
     },
     onFinish: async ({ message, messages: finishedMessages, isError }) => {
+      const completedMessage = withPersistedRobotPolicy(message);
+      const completionEpoch = activityEpochRef.current;
       const currentConversationId = conversationIdRef.current;
       if (!isError && currentConversationId) {
         setStorageStatus("saving");
         try {
-          await saveChatMessage(currentConversationId, message);
+          await saveChatMessage(currentConversationId, completedMessage);
           setStorageStatus("ready");
           await refreshConversations();
         } catch {
@@ -170,7 +249,7 @@ export default function ChatPage() {
         }
       }
 
-      if (isError || !messageText(message.parts).trim()) return;
+      if (isError || !messageText(completedMessage.parts).trim()) return;
 
       setMemoryStatus("working");
       const recentMessages = finishedMessages.slice(-8).map((item) => ({
@@ -208,24 +287,39 @@ export default function ChatPage() {
         setMemoryStatus("offline");
       }
 
-      const assistantText = messageText(message.parts);
+      const assistantText = messageText(completedMessage.parts);
       const lastUserText = [...finishedMessages]
         .reverse()
         .find((item) => item.role === "user");
+      const lastUserContent = lastUserText ? messageText(lastUserText.parts) : "";
+      const threadState = messageThreadState(completedMessage, lastUserContent);
       if (shouldScheduleAutoTopic(
-        lastUserText ? messageText(lastUserText.parts) : "",
+        lastUserContent,
         assistantText,
+        threadState,
       )) {
+        if (
+          completionEpoch !== activityEpochRef.current ||
+          currentConversationId !== conversationIdRef.current
+        ) {
+          return;
+        }
         clearAutoTopicTimer();
+        const candidateEpoch = activityEpochRef.current;
         autoTopicTimerRef.current = setTimeout(async () => {
-          if (
-            document.visibilityState !== "visible" ||
-            inputRef.current.trim() ||
-            messagesRef.current.at(-1)?.id !== message.id
-          ) {
-            return;
-          }
+          autoTopicTimerRef.current = null;
+          if (!candidateGatePasses({
+            candidateEpoch,
+            conversationId: currentConversationId,
+            basedOnMessageId: message.id,
+            threadState,
+            allowActiveAfterIdle: true,
+          })) return;
 
+          const controller = new AbortController();
+          proactiveAbortRef.current?.abort();
+          proactiveAbortRef.current = controller;
+          const timeout = setTimeout(() => controller.abort(), 60_000);
           try {
             const response = await fetch("/api/follow-up", {
               method: "POST",
@@ -233,34 +327,26 @@ export default function ChatPage() {
               body: JSON.stringify({
                 mode: "auto-topic",
                 messages: recentMessages,
+                conversationId: currentConversationId,
+                basedOnMessageId: message.id,
+                threadState,
               }),
-              signal: AbortSignal.timeout(60_000),
+              signal: controller.signal,
             });
             if (!response.ok) return;
             const result = (await response.json()) as {
-              followUp: { text: string } | null;
+              followUp: ProactiveCandidate | null;
             };
-            if (
-              !result.followUp?.text ||
-              inputRef.current.trim() ||
-              messagesRef.current.at(-1)?.id !== message.id
-            ) {
-              return;
-            }
-
-            const autoTopic: UIMessage = {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              parts: [{ type: "text", text: result.followUp.text }],
-            };
-            const nextMessages = [...messagesRef.current, autoTopic];
-            messagesRef.current = nextMessages;
-            setMessages(nextMessages);
-            if (currentConversationId) {
-              await saveChatMessage(currentConversationId, autoTopic);
+            if (result.followUp) {
+              await deliverProactiveCandidate(result.followUp, candidateEpoch, controller);
             }
           } catch {
             // 自动换话题失败不影响当前聊天。
+          } finally {
+            clearTimeout(timeout);
+            if (proactiveAbortRef.current === controller) {
+              proactiveAbortRef.current = null;
+            }
           }
         }, AUTO_TOPIC_DELAY_MS);
       }
@@ -269,6 +355,111 @@ export default function ChatPage() {
 
   const busy = status === "submitted" || status === "streaming";
   const storageReady = storageStatus !== "starting";
+
+  function currentThreadState() {
+    const currentMessages = messagesRef.current;
+    if (currentMessages.at(-1)?.role === "user") return "active";
+    const latestAssistant = [...currentMessages]
+      .reverse()
+      .find((item) => item.role === "assistant");
+    const latestUser = [...currentMessages]
+      .reverse()
+      .find((item) => item.role === "user");
+    return messageThreadState(
+      latestAssistant,
+      latestUser ? messageText(latestUser.parts) : "",
+    );
+  }
+
+  function candidateGatePasses(input: {
+    candidateEpoch: number;
+    conversationId: string | null;
+    basedOnMessageId: string | null;
+    threadState?: ProactiveThreadState;
+    allowActiveAfterIdle?: boolean;
+  }) {
+    if (!mountedRef.current) return false;
+    const liveThreadState = currentThreadState();
+    const threadState =
+      input.threadState === "active" || input.threadState === "departing"
+        ? input.threadState
+        : liveThreadState;
+    return canSendProactiveCandidate({
+      candidateEpoch: input.candidateEpoch,
+      currentEpoch: activityEpochRef.current,
+      candidateConversationId: input.conversationId,
+      currentConversationId: conversationIdRef.current,
+      basedOnMessageId: input.basedOnMessageId,
+      latestMessageId: messagesRef.current.at(-1)?.id ?? null,
+      inputEmpty: !inputRef.current.trim(),
+      visible: document.visibilityState === "visible",
+      busy: busyRef.current,
+      threadState,
+      allowActiveAfterIdle: input.allowActiveAfterIdle,
+    });
+  }
+
+  async function deliverProactiveCandidate(
+    candidate: ProactiveCandidate,
+    candidateEpoch: number,
+    controller: AbortController,
+  ) {
+    if (
+      !candidate.text.trim() ||
+      !candidateGatePasses({
+        candidateEpoch,
+        conversationId: candidate.conversationId,
+        basedOnMessageId: candidate.basedOnMessageId,
+        allowActiveAfterIdle: true,
+      })
+    ) {
+      return false;
+    }
+
+    const validation = await fetch("/api/follow-up", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mode: "validate",
+        candidate,
+        threadState: currentThreadState(),
+      }),
+      signal: controller.signal,
+    });
+    if (!validation.ok) return false;
+    const result = (await validation.json()) as { valid?: boolean };
+    if (
+      result.valid !== true ||
+      !candidateGatePasses({
+        candidateEpoch,
+        conversationId: candidate.conversationId,
+        basedOnMessageId: candidate.basedOnMessageId,
+        allowActiveAfterIdle: true,
+      })
+    ) {
+      return false;
+    }
+
+    const proactiveMessage: UIMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      parts: [{ type: "text", text: candidate.text.trim() }],
+    };
+    const nextMessages = [...messagesRef.current, proactiveMessage];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    if (candidate.conversationId) {
+      setStorageStatus("saving");
+      try {
+        await saveChatMessage(candidate.conversationId, proactiveMessage);
+        setStorageStatus("ready");
+        await refreshConversations();
+      } catch {
+        setStorageStatus("error");
+      }
+    }
+    return true;
+  }
 
   const statusSentence = (() => {
     if (busy) return "Home Robot 正在回你。";
@@ -285,41 +476,97 @@ export default function ChatPage() {
 
   useEffect(() => {
     let cancelled = false;
+    let dueController: AbortController | null = null;
+    let dueTimeout: ReturnType<typeof setTimeout> | null = null;
 
     openChatSession()
       .then(async (session) => {
         if (cancelled) return;
         conversationIdRef.current = session.conversationId;
+        messagesRef.current = session.messages;
         setConversationId(session.conversationId);
         setMessages(session.messages);
+        setStorageStatus(session.persistence === "ready" ? "ready" : "local");
 
-        // ponytail: 只在打开聊天页时领取回访；关页推送留给以后真正的通知通道。
+        // 打开聊天页时只领取“候选”；通过客户端与服务端双重 Send Gate 后才发送。
         try {
+          const candidateEpoch = activityEpochRef.current;
+          const basedOnMessageId = session.messages.at(-1)?.id ?? null;
+          const threadState = currentThreadState();
+          if (!candidateGatePasses({
+            candidateEpoch,
+            conversationId: session.conversationId,
+            basedOnMessageId,
+            threadState,
+            allowActiveAfterIdle: true,
+          })) {
+            await refreshConversations();
+            return;
+          }
+
+          dueController = new AbortController();
+          proactiveAbortRef.current?.abort();
+          proactiveAbortRef.current = dueController;
+          dueTimeout = setTimeout(() => dueController?.abort(), 15_000);
           const response = await fetch("/api/follow-up", {
             method: "POST",
-            signal: AbortSignal.timeout(10_000),
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              mode: "due-follow-up",
+              conversationId: session.conversationId,
+              basedOnMessageId,
+              threadState,
+            }),
+            signal: dueController.signal,
           });
-          if (response.ok) {
-            const result = (await response.json()) as {
-              followUp: { text: string } | null;
-            };
-            if (result.followUp?.text) {
-              const followUp: UIMessage = {
-                id: crypto.randomUUID(),
-                role: "assistant",
-                parts: [{ type: "text", text: result.followUp.text }],
-              };
-              setMessages([...session.messages, followUp]);
-              if (session.conversationId) {
-                await saveChatMessage(session.conversationId, followUp);
-              }
-            }
+          let followUp: ProactiveCandidate | null = response.ok
+            ? ((await response.json()) as { followUp: ProactiveCandidate | null })
+                .followUp
+            : null;
+
+          // 未到 24h 回访门槛时，仍允许已真实 idle 30 分钟的历史 thread
+          // 进入模型仲裁；服务端会重读 last_interaction_at，不代表必定发送。
+          if (!followUp && !cancelled) {
+            if (dueTimeout) clearTimeout(dueTimeout);
+            dueTimeout = setTimeout(() => dueController?.abort(), 60_000);
+            const autoResponse = await fetch("/api/follow-up", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                mode: "auto-topic",
+                conversationId: session.conversationId,
+                basedOnMessageId,
+                threadState,
+                messages: session.messages.slice(-8).map((item) => ({
+                  role: item.role,
+                  content: messageText(item.parts),
+                })),
+              }),
+              signal: dueController.signal,
+            });
+            followUp = autoResponse.ok
+              ? ((await autoResponse.json()) as {
+                  followUp: ProactiveCandidate | null;
+                }).followUp
+              : null;
+          }
+
+          if (followUp && !cancelled) {
+            await deliverProactiveCandidate(
+              followUp,
+              candidateEpoch,
+              dueController,
+            );
           }
         } catch {
           // 主动回访失败不影响正常打开聊天。
+        } finally {
+          if (dueTimeout) clearTimeout(dueTimeout);
+          if (proactiveAbortRef.current === dueController) {
+            proactiveAbortRef.current = null;
+          }
         }
 
-        setStorageStatus(session.persistence === "ready" ? "ready" : "local");
         await refreshConversations();
       })
       .catch(() => {
@@ -328,6 +575,8 @@ export default function ChatPage() {
 
     return () => {
       cancelled = true;
+      if (dueTimeout) clearTimeout(dueTimeout);
+      dueController?.abort();
     };
   }, [refreshConversations, setMessages]);
 
@@ -338,6 +587,39 @@ export default function ChatPage() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") invalidateProactive();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      mountedRef.current = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      invalidateProactive();
+    };
+  }, [invalidateProactive]);
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(PROACTIVE_ACTIVITY_CHANNEL);
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      const payload = event.data as { type?: unknown } | null;
+      if (payload?.type === "user-activity") invalidateProactive();
+    };
+    proactiveActivityChannelRef.current = channel;
+    return () => {
+      if (proactiveActivityChannelRef.current === channel) {
+        proactiveActivityChannelRef.current = null;
+      }
+      channel.close();
+    };
+  }, [invalidateProactive]);
 
   useEffect(() => {
     const cache = readReasoningStyleCache();
@@ -386,16 +668,15 @@ export default function ChatPage() {
 
   useEffect(() => {
     inputRef.current = input;
-    if (input.trim()) clearAutoTopicTimer();
-  }, [clearAutoTopicTimer, input]);
-
-  useEffect(() => clearAutoTopicTimer, [clearAutoTopicTimer]);
+  }, [input]);
 
   async function submit() {
     const text = input.trim();
     if (!text || busy || !storageReady) return;
 
-    clearAutoTopicTimer();
+    // 必须在任何保存等待之前失效，堵住“用户已回来、旧候选仍在生成”的窗口。
+    invalidateProactive();
+    announceUserActivity();
 
     const userId = crypto.randomUUID();
     const currentConversationId = conversationIdRef.current;
@@ -405,9 +686,13 @@ export default function ChatPage() {
       parts: [{ type: "text", text }],
     };
 
+    inputRef.current = "";
     setInput("");
     requestAnimationFrame(() => textareaRef.current?.focus());
     clearError();
+
+    // 跨标签页/设备共享服务端活动时钟；必须早于用户消息持久化和模型请求。
+    await registerServerActivity();
 
     if (currentConversationId) {
       setStorageStatus("saving");
@@ -428,10 +713,12 @@ export default function ChatPage() {
 
   async function startNewConversation() {
     if (busy || sessionBusy) return;
+    invalidateProactive();
     setSessionBusy(true);
     try {
       const session = await createChatConversation();
       conversationIdRef.current = session.conversationId;
+      messagesRef.current = [];
       setConversationId(session.conversationId);
       setMessages([]);
       clearError();
@@ -449,10 +736,12 @@ export default function ChatPage() {
       setSessionsOpen(false);
       return;
     }
+    invalidateProactive();
     setSessionBusy(true);
     try {
       const session = await loadChatSession(id);
       conversationIdRef.current = session.conversationId;
+      messagesRef.current = session.messages;
       setConversationId(session.conversationId);
       setMessages(session.messages);
       clearError();
@@ -487,6 +776,7 @@ export default function ChatPage() {
       return;
     }
 
+    invalidateProactive();
     setSessionBusy(true);
     try {
       await deleteChatConversation(id);
@@ -496,6 +786,7 @@ export default function ChatPage() {
           ? await loadChatSession(remaining[0].id)
           : await createChatConversation();
         conversationIdRef.current = session.conversationId;
+        messagesRef.current = session.messages;
         setConversationId(session.conversationId);
         setMessages(session.messages);
       }
@@ -535,6 +826,7 @@ export default function ChatPage() {
 
   return (
     <main className={styles.page}>
+      <div className={styles.appFrame}>
       <aside
         className={`${styles.sidebar} ${sessionsOpen ? styles.sidebarOpen : ""}`}
         aria-label="对话列表"
@@ -775,6 +1067,7 @@ export default function ChatPage() {
               <button
                 disabled={busy}
                 onClick={() => {
+                  invalidateProactive();
                   clearError();
                   void regenerate();
                 }}
@@ -796,7 +1089,17 @@ export default function ChatPage() {
               aria-label="发送给 Home Robot 的消息"
               className={styles.textarea}
               disabled={!storageReady}
-              onChange={(event) => setInput(event.currentTarget.value)}
+              onChange={(event) => {
+                const nextInput = event.currentTarget.value;
+                const startedTyping =
+                  Boolean(nextInput.trim()) && !inputRef.current.trim();
+                inputRef.current = nextInput;
+                if (nextInput.trim()) {
+                  invalidateProactive();
+                  if (startedTyping) announceUserActivity();
+                }
+                setInput(nextInput);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -859,6 +1162,7 @@ export default function ChatPage() {
           </Link>
         </section>
       </aside>
+      </div>
     </main>
   );
 }

@@ -8,7 +8,12 @@ import {
   mergeDistinctText,
   textSimilarity,
 } from "@/lib/governance/text";
-import { emotionExpiresAt, isFollowUpQuietHours } from "./state-policy";
+import {
+  emotionExpiresAt,
+  isFollowUpQuietHours,
+  isMeaninglessMomentText,
+} from "./state-policy";
+export { isMeaninglessMomentText } from "./state-policy";
 import type {
   EmotionState,
   JournalEntry,
@@ -413,16 +418,19 @@ export function getRelationshipState() {
 }
 
 /**
- * 「没有信息量」的应答：ok/yes/好/嗯/哈哈 等（含标点变体，忽略大小写），
- * 或长度不足 6 的短句。这类内容不得更新 lastMoment，也不得成为关系事件。
+ * 在用户请求进入聊天接口时立即推进活动时钟，不等待模型生成或 post-turn。
+ * 这里只记录在线活动；关系轮次与 lastMoment 仍由 touchRelationship 负责。
  */
-const MEANINGLESS_MOMENT_PATTERN =
-  /^(ok+|yes|no|好(的)?|嗯+|哈+|可以|知道了|行(吧)?|在吗|在)[\s。.!！,，、~～?？…]*$/i;
-
-export function isMeaninglessMomentText(text: string) {
-  const trimmed = text.trim();
-  if (trimmed.length < 6) return true;
-  return MEANINGLESS_MOMENT_PATTERN.test(trimmed);
+export function touchUserActivity(now = new Date()) {
+  const updatedAt = now.toISOString();
+  getDatabase()
+    .prepare(`
+      update relationship_state
+      set last_interaction_at = ?, updated_at = ?
+      where id = 1
+    `)
+    .run(updatedAt, updatedAt);
+  return updatedAt;
 }
 
 export function touchRelationship(input: {
@@ -883,6 +891,13 @@ export function listOpenTopics(status?: TopicStatus) {
   return (rows as unknown as TopicRow[]).map(rowToTopic);
 }
 
+export function getOpenTopic(id: string) {
+  const row = getDatabase()
+    .prepare("select * from open_topics where id = ?")
+    .get(id) as TopicRow | undefined;
+  return row ? rowToTopic(row) : null;
+}
+
 const PRIVATE_FOLLOW_UP =
   /家庭|财务|资产|收入|负债|持仓|亏损|前任|前男友|前女友/;
 
@@ -890,18 +905,12 @@ export function isPrivateFollowUpTopic(content: string) {
   return PRIVATE_FOLLOW_UP.test(content);
 }
 
-/**
- * 领取一条到期回访。全局最多两次：24 小时一次，再过 48 小时一次。
- * ponytail: 首版随聊天页打开领取；需要关页推送时再接系统通知通道。
- */
-export function claimDueFollowUp(now = new Date()) {
-  if (isFollowUpQuietHours(now)) return null;
-  const db = getDatabase();
-  const nowIso = now.toISOString();
-  const relationship = db
-    .prepare("select last_interaction_at from relationship_state where id = 1")
-    .get() as { last_interaction_at: string | null };
-  const lastInteraction = relationship.last_interaction_at;
+function dueFollowUpRows(db: DatabaseSync, now: Date) {
+  const lastInteraction = (
+    db
+      .prepare("select last_interaction_at from relationship_state where id = 1")
+      .get() as { last_interaction_at: string | null }
+  ).last_interaction_at;
   if (
     !lastInteraction ||
     lastInteraction > new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString()
@@ -938,17 +947,89 @@ export function claimDueFollowUp(now = new Date()) {
     .all(
       new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
     ) as unknown as TopicRow[];
-  const topic = rows.find((row) => !isPrivateFollowUpTopic(row.content));
+  return {
+    lastInteraction,
+    topic: rows.find((row) => !isPrivateFollowUpTopic(row.content)) ?? null,
+  };
+}
+
+/** 只读取一条到期回访候选；真正占用发送次数要等最终 Send Gate。 */
+export function peekDueFollowUp(now = new Date()) {
+  if (isFollowUpQuietHours(now)) return null;
+  const due = dueFollowUpRows(getDatabase(), now);
+  return due?.topic ? rowToTopic(due.topic) : null;
+}
+
+/**
+ * 服务端最终闸门通过后，以 CAS 方式占用一次回访额度。生成候选期间只要用户
+ * 重新活跃、Topic 改变/关闭或其他请求抢先领取，提交就失败。
+ */
+export function commitDueFollowUp(input: {
+  topicId: string;
+  expectedUpdatedAt: string;
+  expectedFollowUpCount: number;
+  generatedAt: string;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  if (isFollowUpQuietHours(now)) return null;
+  const generatedAt = new Date(input.generatedAt);
+  if (Number.isNaN(generatedAt.getTime())) return null;
+
+  const db = getDatabase();
+  const due = dueFollowUpRows(db, now);
+  if (
+    !due?.topic ||
+    due.lastInteraction >= generatedAt.toISOString() ||
+    due.topic.id !== input.topicId ||
+    due.topic.updated_at !== input.expectedUpdatedAt ||
+    due.topic.follow_up_count !== input.expectedFollowUpCount
+  ) {
+    return null;
+  }
+
+  const nowIso = now.toISOString();
+  const changed = db
+    .prepare(`
+      update open_topics
+      set follow_up_count = follow_up_count + 1,
+          last_follow_up_at = ?,
+          updated_at = ?
+      where id = ?
+        and status = 'active'
+        and updated_at = ?
+        and follow_up_count = ?
+    `)
+    .run(
+      nowIso,
+      nowIso,
+      input.topicId,
+      input.expectedUpdatedAt,
+      input.expectedFollowUpCount,
+    ).changes;
+  return changed > 0 ? getOpenTopic(input.topicId) : null;
+}
+
+/**
+ * 领取一条到期回访。全局最多两次：24 小时一次，再过 48 小时一次。
+ * ponytail: 首版随聊天页打开领取；需要关页推送时再接系统通知通道。
+ */
+export function claimDueFollowUp(now = new Date()) {
+  if (isFollowUpQuietHours(now)) return null;
+  const db = getDatabase();
+  const nowIso = now.toISOString();
+  const topic = dueFollowUpRows(db, now)?.topic;
   if (!topic) return null;
 
   const changed = db
     .prepare(`
       update open_topics
       set follow_up_count = follow_up_count + 1,
-          last_follow_up_at = ?
+          last_follow_up_at = ?,
+          updated_at = ?
       where id = ? and status = 'active' and follow_up_count = ?
     `)
-    .run(nowIso, topic.id, topic.follow_up_count).changes;
+    .run(nowIso, nowIso, topic.id, topic.follow_up_count).changes;
   if (changed === 0) return null;
   const claimed = db
     .prepare("select * from open_topics where id = ?")
@@ -1163,8 +1244,7 @@ export function buildRelationshipContext() {
   const state = getRelationshipState();
   const activeTopics = listOpenTopics("active").slice(0, 3);
   const lastMoment = state.lastMoment.trim();
-  const usefulLastMoment =
-    lastMoment.length >= 6 && !isMeaninglessMomentText(lastMoment);
+  const usefulLastMoment = !isMeaninglessMomentText(lastMoment);
 
   return [
     "与用户是自然熟悉的关系，作为背景即可，不要在回复中强调。",

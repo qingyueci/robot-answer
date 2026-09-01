@@ -20,6 +20,7 @@ type MemoryRow = {
   governance_reason: string;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
 };
 
 let database: DatabaseSync | undefined;
@@ -195,7 +196,7 @@ export function listMemoryRecords(status?: MemoryStatus) {
   return (rows as unknown as MemoryRow[]).map(rowToRecord);
 }
 
-export function markMemoryConfirmed(id: string, mem0Id: string) {
+export function markMemoryConfirmed(id: string, mem0Id: string | null) {
   const now = new Date().toISOString();
   getDatabase()
     .prepare(`
@@ -205,6 +206,176 @@ export function markMemoryConfirmed(id: string, mem0Id: string) {
     `)
     .run(mem0Id, now, id);
   return getMemoryRecord(id);
+}
+
+/** 仅在本地确认记录仍是发起向量写入时的版本时绑定结果。 */
+export function attachMemoryVectorIfCurrent(input: {
+  id: string;
+  expectedUpdatedAt: string;
+  mem0Id: string;
+}) {
+  const now = new Date().toISOString();
+  const result = getDatabase()
+    .prepare(`
+      update memory_records
+      set mem0_id = ?, updated_at = ?
+      where id = ?
+        and status = 'confirmed'
+        and mem0_id is null
+        and updated_at = ?
+        and deleted_at is null
+    `)
+    .run(input.mem0Id, now, input.id, input.expectedUpdatedAt);
+  return result.changes > 0 ? getMemoryRecord(input.id) : null;
+}
+
+/** 向量失败诊断也受版本约束，避免覆盖后续纠正留下的状态。 */
+export function setMemoryGovernanceReasonIfCurrent(input: {
+  id: string;
+  expectedUpdatedAt: string;
+  reason: string;
+}) {
+  const now = new Date().toISOString();
+  const result = getDatabase()
+    .prepare(`
+      update memory_records
+      set governance_reason = ?, updated_at = ?
+      where id = ?
+        and status = 'confirmed'
+        and mem0_id is null
+        and updated_at = ?
+        and deleted_at is null
+    `)
+    .run(
+      input.reason.trim().slice(0, 120),
+      now,
+      input.id,
+      input.expectedUpdatedAt,
+    );
+  return result.changes > 0 ? getMemoryRecord(input.id) : null;
+}
+
+/**
+ * 在单个本地事务中停用被纠正的旧事实，并让新事实立即可被本地 Recall 使用。
+ * 向量同步随后 best-effort 执行，进程在任意时刻退出都不会让旧事实重新召回。
+ */
+export function reconcileConfirmedMemoryRecords(input: {
+  oldIds: string[];
+  content: string;
+  category: MemoryCategory;
+  sensitive: boolean;
+  confidence: number;
+  sourceConversationId?: string | null;
+  sourceExcerpt: string;
+  expiresAt?: string | null;
+  aboutThirdParty?: boolean;
+}) {
+  const oldIds = [...new Set(input.oldIds.filter(Boolean))];
+  const content = normalizeContent(input.content);
+  if (oldIds.length === 0 || !content) return null;
+
+  const db = getDatabase();
+  const now = new Date().toISOString();
+  const fingerprint = fingerprintFor(input.category, content);
+  const placeholders = oldIds.map(() => "?").join(", ");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const oldRows = db
+      .prepare(`
+        select * from memory_records
+        where id in (${placeholders})
+          and status = 'confirmed'
+          and deleted_at is null
+      `)
+      .all(...oldIds) as unknown as MemoryRow[];
+    if (oldRows.length === 0) {
+      db.exec("ROLLBACK");
+      return null;
+    }
+
+    const existing = db
+      .prepare("select * from memory_records where fingerprint = ?")
+      .get(fingerprint) as MemoryRow | undefined;
+    const activeConfirmed = Boolean(
+      existing && existing.status === "confirmed" && !existing.deleted_at,
+    );
+    const targetId = existing?.id ?? randomUUID();
+    const previousTargetMem0Id = activeConfirmed ? null : existing?.mem0_id ?? null;
+
+    if (!existing) {
+      db.prepare(`
+        insert into memory_records (
+          id, fingerprint, content, category, status, sensitive, confidence,
+          source_conversation_id, source_excerpt, expires_at, mem0_id,
+          about_third_party, governance_reason, created_at, updated_at
+        ) values (?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, null, ?, ?, ?, ?)
+      `).run(
+        targetId,
+        fingerprint,
+        content,
+        input.category,
+        input.sensitive ? 1 : 0,
+        Math.max(0, Math.min(1, input.confidence)),
+        input.sourceConversationId ?? null,
+        input.sourceExcerpt.trim().slice(0, 1200),
+        input.expiresAt ?? null,
+        input.aboutThirdParty ? 1 : 0,
+        "用户本轮明确纠正；向量待同步",
+        now,
+        now,
+      );
+    } else if (!activeConfirmed || !existing.mem0_id) {
+      db.prepare(`
+        update memory_records
+        set content = ?, category = ?, status = 'confirmed', sensitive = ?,
+            confidence = ?, source_conversation_id = ?, source_excerpt = ?,
+            expires_at = ?, mem0_id = null, about_third_party = ?,
+            governance_reason = '用户本轮明确纠正；向量待同步',
+            updated_at = ?, deleted_at = null
+        where id = ?
+      `).run(
+        content,
+        input.category,
+        input.sensitive ? 1 : 0,
+        Math.max(0, Math.min(1, input.confidence)),
+        input.sourceConversationId ?? null,
+        input.sourceExcerpt.trim().slice(0, 1200),
+        input.expiresAt ?? null,
+        input.aboutThirdParty ? 1 : 0,
+        now,
+        targetId,
+      );
+    }
+
+    db.prepare(`
+      update memory_records
+      set status = 'rejected',
+          governance_reason = '用户本轮明确纠正，旧事实已停用',
+          updated_at = ?
+      where id in (${placeholders})
+        and status = 'confirmed'
+        and deleted_at is null
+    `).run(now, ...oldIds);
+
+    db.exec("COMMIT");
+    const record = getMemoryRecord(targetId);
+    if (!record) throw new Error("纠正后的本地记忆不存在");
+    return {
+      record,
+      needsVectorSync: !activeConfirmed || !existing?.mem0_id,
+      vectorIdsToDelete: [
+        ...oldRows.map((row) => row.mem0_id).filter((id): id is string => Boolean(id)),
+        ...(previousTargetMem0Id ? [previousTargetMem0Id] : []),
+      ],
+    };
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // COMMIT 后的读取异常无需再次回滚。
+    }
+    throw error;
+  }
 }
 
 export function updateMemoryRecord(id: string, content: string) {
@@ -246,6 +417,27 @@ export function setMemoryGovernanceReason(id: string, reason: string) {
       id,
     );
   return getMemoryRecord(id);
+}
+
+/** stale 向量删不掉时，把它绑定到 rejected tombstone，供语义召回硬过滤。 */
+export function attachVectorToRejectedMemory(input: {
+  id: string;
+  mem0Id: string;
+  reason: string;
+}) {
+  const result = getDatabase()
+    .prepare(`
+      update memory_records
+      set mem0_id = ?, governance_reason = ?, updated_at = ?
+      where id = ? and status = 'rejected' and deleted_at is null
+    `)
+    .run(
+      input.mem0Id,
+      input.reason.trim().slice(0, 120),
+      new Date().toISOString(),
+      input.id,
+    );
+  return result.changes > 0 ? getMemoryRecord(input.id) : null;
 }
 
 /**

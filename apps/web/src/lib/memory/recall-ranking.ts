@@ -1,3 +1,5 @@
+import type { RecallEvidence } from "./grounding";
+
 export const RECALL_ROUTES = [
   "keyword",
   "semantic",
@@ -8,7 +10,7 @@ export const RECALL_ROUTES = [
 
 export type RecallRoute = (typeof RECALL_ROUTES)[number];
 
-export type RecallCandidate = {
+export type RecallCandidate = RecallEvidence & {
   id: string;
   content: string;
   route: RecallRoute;
@@ -94,6 +96,23 @@ function candidateScore(query: string, candidate: RecallCandidate) {
   return { score, relevance };
 }
 
+function groundingStrength(candidate: RecallCandidate) {
+  const assertion =
+    candidate.assertionMode === "fact"
+      ? 3
+      : candidate.assertionMode === "qualified"
+        ? 2
+        : 1;
+  const evidence = {
+    user_confirmed: 5,
+    user_statement: 4,
+    derived_summary: 3,
+    topic_state: 2,
+    model_inference: 1,
+  }[candidate.evidenceKind];
+  return assertion * 10 + evidence + clamp(candidate.reliability);
+}
+
 /**
  * 五路候选统一打分、跨路去重，再取全局 Top K。
  * 同一事实被多路命中会小幅加分，但不会因为重复出现占多个位置。
@@ -129,20 +148,30 @@ export function rankRecallCandidates(
     if (!existing.routes.includes(candidate.route)) {
       existing.routes.push(candidate.route);
     }
-    if (candidate.score > existing.score) {
+    const replaceGrounding =
+      groundingStrength(candidate) > groundingStrength(existing) ||
+      (groundingStrength(candidate) === groundingStrength(existing) &&
+        candidate.score > existing.score);
+    const bestScore = Math.max(existing.score, candidate.score);
+    const bestRelevance = Math.max(existing.relevance, candidate.relevance);
+    if (replaceGrounding) {
       existing.id = candidate.id;
       existing.route = candidate.route;
       existing.sourceType = candidate.sourceType;
+      existing.evidenceKind = candidate.evidenceKind;
+      existing.assertionMode = candidate.assertionMode;
+      existing.confidence = candidate.confidence;
+      existing.memoryType = candidate.memoryType;
+      existing.source = candidate.source;
       existing.baseScore = candidate.baseScore;
       existing.reliability = candidate.reliability;
       existing.routeRank = candidate.routeRank;
       existing.updatedAt = candidate.updatedAt;
-      existing.relevance = candidate.relevance;
-      existing.score = candidate.score;
-      if (candidate.content.length > existing.content.length) {
-        existing.content = candidate.content;
-      }
+      // 证据元数据与正文必须来自同一候选，避免把推断正文标成强事实。
+      existing.content = candidate.content;
     }
+    existing.relevance = bestRelevance;
+    existing.score = bestScore;
   }
 
   return merged

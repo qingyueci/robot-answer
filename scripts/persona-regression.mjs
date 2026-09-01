@@ -83,7 +83,11 @@ assert.equal(
   12 * 60 * 60 * 1000,
   "轻量情绪应在 12 小时后过期",
 );
-assert.equal(AUTO_TOPIC_DELAY_MS, 45_000);
+assert.equal(
+  AUTO_TOPIC_DELAY_MS,
+  30 * 60 * 1000,
+  "普通主动话题应等待约 30 分钟稳定 idle，而不是在对话刚停下时抢话",
+);
 assert.equal(
   shouldScheduleAutoTopic("这个问题清楚了", "好，那先到这里。"),
   true,
@@ -93,6 +97,11 @@ assert.equal(
   shouldScheduleAutoTopic("我再想想", "你更在意成本还是时间？"),
   false,
   "当前话题仍有待回答问题时不应切换",
+);
+assert.equal(
+  shouldScheduleAutoTopic("我仍在想知情权和自主权", "这个矛盾还没走完。", "active"),
+  true,
+  "active thread 只登记 30 分钟 idle 仲裁，不等于立即获得发送资格",
 );
 assert.equal(
   shouldScheduleAutoTopic("我先去忙了", "好，忙完再说。"),

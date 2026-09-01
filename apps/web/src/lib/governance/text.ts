@@ -105,6 +105,72 @@ export function looksContradictory(left: string, right: string) {
   );
 }
 
+export type CurrentFactCorrection = {
+  scope: string;
+  rejected: string;
+  asserted: string;
+};
+
+/** 识别用户当场给出的“不是 X，是/而是 Y”事实纠正。 */
+export function extractCurrentFactCorrection(
+  value: string,
+): CurrentFactCorrection | null {
+  const text = value.trim();
+  const match = text.match(
+    /(?:并不是|不是|并非)\s*([^，,。；;！？!?\n]{1,80}?)\s*[，,。；;！？!?\s]*(?:而是|是)\s*([^，,。；;！？!?\n]{1,80})/,
+  );
+  const rejected = match?.[1]?.trim() ?? "";
+  const asserted = match?.[2]?.trim() ?? "";
+  const prefix = match?.index === undefined ? "" : text.slice(0, match.index);
+  const scope = prefix.split(/[，,。；;！？!?\n]/).at(-1)?.trim().slice(-80) ?? "";
+  return rejected && asserted ? { scope, rejected, asserted } : null;
+}
+
+function relatesToFragment(text: string, fragment: string) {
+  const normalized = comparableText(fragment);
+  if (!normalized) return false;
+  return (
+    comparableText(text).includes(normalized) ||
+    textSimilarity(text, fragment) >= 0.55
+  );
+}
+
+function relatesToCorrectionScope(text: string, scope: string) {
+  const normalized = comparableText(scope)
+    .replace(/这件事|那件事|事情|情况/g, "")
+    .replace(/的地方|地方|的/g, "")
+    .replace(/^(?:之前|此前|以前|当时|那次|这次|前几天|最近|原来|先前)+/, "");
+  // “不是 X，是 Y”前没有可用主语时，只能按 X/Y 本身判断。
+  return !normalized || relatesToFragment(text, normalized);
+}
+
+/** 旧记忆命中被用户否定的 X、且没有包含新确认的 Y。 */
+export function conflictsWithCurrentFactCorrection(
+  memoryText: string,
+  userText: string,
+) {
+  const correction = extractCurrentFactCorrection(userText);
+  return Boolean(
+    correction &&
+      relatesToFragment(memoryText, correction.rejected) &&
+      !relatesToFragment(memoryText, correction.asserted) &&
+      relatesToCorrectionScope(memoryText, correction.scope),
+  );
+}
+
+/** 后台提取结果是否承载了用户本轮新确认的 Y。 */
+export function reflectsCurrentFactCorrection(
+  memoryText: string,
+  userText: string,
+) {
+  const correction = extractCurrentFactCorrection(userText);
+  return Boolean(
+    correction &&
+      relatesToFragment(memoryText, correction.asserted) &&
+      relatesToCorrectionScope(memoryText, correction.scope),
+  );
+}
+
 const JOURNAL_THEMES: Array<[string, RegExp]> = [
   ["expression", /生硬|语气|温度|暧昧|接话|聊天方式/],
   ["trading", /同花顺|行情|被套|看盘|接早|持仓|浮亏/],

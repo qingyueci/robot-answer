@@ -8,9 +8,18 @@
   "scripts": {
     "dev": "npm run dev --workspace @home-robot/web",
     "build": "npm run build --workspace @home-robot/web",
+    "desktop:visual": "node scripts/prepare-desktop-visual-assets.mjs",
+    "desktop:prepare": "npm run desktop:visual && npm run build && node scripts/prepare-desktop-runtime.mjs",
+    "desktop:dev": "npm run desktop:prepare && npm run start --workspace @home-robot/desktop",
+    "desktop:package": "npm run desktop:prepare && npm run package --workspace @home-robot/desktop",
+    "desktop:make": "npm run desktop:prepare && npm run make --workspace @home-robot/desktop",
     "typecheck": "npm run typecheck --workspace @home-robot/web",
+    "test:desktop": "node scripts/desktop-runtime-regression.mjs",
     "test:persona": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/persona-regression.mjs",
     "test:recall": "node --no-warnings scripts/recall-ranking-regression.mjs",
+    "test:conversation": "node --no-warnings scripts/conversation-policy-regression.mjs",
+    "test:proactive": "node --no-warnings scripts/proactive-arbitration-regression.mjs",
+    "test:reconciliation": "node --no-warnings scripts/memory-reconciliation-regression.mjs",
     "memory:nightly": "node scripts/nightly-memory-worker.mjs --run-once"
   },
   "engines": {

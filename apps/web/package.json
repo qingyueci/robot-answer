@@ -14,11 +14,15 @@
     "@qdrant/js-client-rest": "1.18.0",
     "@supabase/supabase-js": "2.110.8",
     "ai": "7.0.34",
+    "better-sqlite3": "12.11.1",
     "mem0ai": "3.1.1",
-    "next": "16.2.11",
+    "next": "16.3.1",
     "ollama": "0.5.18",
     "react": "19.2.8",
     "react-dom": "19.2.8"
+  },
+  "optionalDependencies": {
+    "@img/sharp-wasm32": "0.35.3"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

@@ -6,8 +6,6 @@ import {
 import {
   consolidateConfirmedMemories,
   getMemoryGovernanceStats,
-  listMemoryRecords,
-  rejectMemoryRecord,
   runMemoryHousekeeping,
 } from "@/lib/memory/local-store";
 import { deleteConfirmedMemory } from "@/lib/memory/service";
@@ -21,15 +19,12 @@ export function currentGovernanceStats() {
   };
 }
 
-/** 由 API 统一执行保留、过期、去重和归档，不把整理工作留给页面。 */
+/** API 执行过期、去重和归档；待确认候选最多保留 14 天。 */
 export async function runAutomaticGovernance(scope: GovernanceScope = "all") {
   const result: Record<string, unknown> = {};
 
   if (scope === "memory" || scope === "all") {
-    const pending = listMemoryRecords("candidate");
-    for (const record of pending) {
-      rejectMemoryRecord(record.id, "API 已接管去留：归档旧的人工待确认项");
-    }
+    // 未确认推断/冲突会保留为 candidate；housekeeping 只清理超过 14 天的项。
     const housekeeping = runMemoryHousekeeping();
     const consolidated = consolidateConfirmedMemories();
     let vectorsRemoved = 0;
@@ -45,7 +40,8 @@ export async function runAutomaticGovernance(scope: GovernanceScope = "all") {
       ...housekeeping,
       merged: consolidated.merged,
       vectorsRemoved,
-      candidatesResolved: pending.length,
+      candidatesResolved:
+        housekeeping.staleCandidates + housekeeping.thirdPartySensitive,
     };
   }
 

@@ -1,10 +1,20 @@
 import type { UIMessage } from "ai";
 import { getEmotionState } from "@/lib/companion/store";
+import { readPersistedRobotPolicy } from "@/lib/companion/state-policy";
 import { ROBOT_SYSTEM_PROMPT } from "@/lib/persona/system-prompt";
 import { ROBOT_INTERACTION_PROFILE } from "@/lib/persona/interaction-profile";
 import { voiceExamplesForMode } from "@/lib/persona/voice-examples";
 import { retrieveUnifiedMemory } from "@/lib/memory/retriever";
-import type { RecallRoute } from "@/lib/memory/recall-ranking";
+import { buildMemoryGroundingSection } from "@/lib/memory/grounding";
+import {
+  RECALL_ROUTES,
+  type RankedRecall,
+  type RecallRoute,
+} from "@/lib/memory/recall-ranking";
+import {
+  conflictsWithCurrentFactCorrection,
+  looksContradictory,
+} from "@/lib/governance/text";
 import {
   detectConversationMode,
   modeInstruction,
@@ -14,6 +24,12 @@ import {
   detectAndRecordDirectives,
   listConversationDirectives,
 } from "./directives";
+import {
+  conversationStrategyInstruction,
+  decideConversationPolicy,
+  type ConversationMove,
+  type ThreadState,
+} from "./conversation-policy";
 import { conversationKey, getChatStateDb } from "./state-db";
 
 /**
@@ -21,18 +37,25 @@ import { conversationKey, getChatStateDb } from "./state-db";
  *
  * 上下文优先级（从高到低）：
  * 1. 安全和关系边界（ROBOT_SYSTEM_PROMPT 作为 base）
- * 2. 用户本轮明确要求 + 当场纠正（conversation_directives）
- * 3. 当前会话模式指令
- * 4. 五路召回的统一排序结果（关键词、语义、时间、话题、关系）
- * 5. 最近有效消息（token 预算裁剪，返回值里）
+ * 2. 用户本轮明确表述、当前会话原文与当场纠正
+ * 3. Conversation Move / Active Thread 与当前会话模式
+ * 4. 带证据等级的五路召回结果（关键词、语义、时间、话题、关系）
+ * 5. 关系/情绪派生状态与模型推断
  */
 
 export type BuiltChatContext = {
   system: string;
+  /** 仅供服务端受控记忆回复使用，不返回客户端。 */
+  groundingItems: RankedRecall[];
   /** 裁剪后的最近消息（保持原结构，供 convertToModelMessages）。 */
   messages: UIMessage[];
   debug: {
     mode: ConversationMode;
+    conversationMove: ConversationMove;
+    threadState: ThreadState;
+    allowTopicSwitch: boolean;
+    longFormRequested: boolean;
+    continuesPriorActiveThread: boolean;
     memoryIds: string[];
     /** 裁剪后消息的估算 token。 */
     contextTokens: number;
@@ -133,6 +156,29 @@ export async function buildChatContext(input: {
     .slice(-4, -1)
     .map(messageText);
   const mode = detectConversationMode(input.userText, recentUserTexts);
+  const previousAssistant = input.messages
+    .slice(0, -1)
+    .findLast((message) => message.role === "assistant");
+  const previousPolicy = readPersistedRobotPolicy(previousAssistant);
+  const conversationPolicy = decideConversationPolicy({
+    mode,
+    userText: input.userText,
+    recentMessages: input.messages
+      .filter(
+        (message): message is UIMessage & { role: "user" | "assistant" } =>
+          message.role === "user" || message.role === "assistant",
+      )
+      .map((message) => ({ role: message.role, text: messageText(message) })),
+    previousThreadState: previousPolicy?.threadState,
+    previousConversationMove:
+      previousPolicy?.conversationMove === "participate" ||
+      previousPolicy?.conversationMove === "continue_thread" ||
+      previousPolicy?.conversationMove === "support" ||
+      previousPolicy?.conversationMove === "answer" ||
+      previousPolicy?.conversationMove === "close"
+        ? previousPolicy.conversationMove
+        : undefined,
+  });
 
   // 7. 最近消息 token 预算裁剪。
   const { kept, usedTokens } = trimMessagesByBudget(
@@ -141,13 +187,27 @@ export async function buildChatContext(input: {
   );
 
   // 摘要由 post-turn 同一次后台提取调用维护，这里只读，不额外调用模型。
-  const summary = readSummary(key)?.summary ?? null;
+  const summaryRow = readSummary(key);
+  const summary = summaryRow?.summary ?? null;
   // 五路召回统一去重和排序，任一路失败都由 retriever 内部降级。
   const recall = await retrieveUnifiedMemory({
     query: input.userText,
     summary,
+    summaryUpdatedAt: summaryRow?.updated_at ?? null,
     limit: 6,
   });
+  // 本轮事实纠正对所有回复生效，不只对“你还记得吗”静态分支生效。
+  const groundingItems = recall.items.filter(
+    (item) =>
+      !looksContradictory(item.content, input.userText) &&
+      !conflictsWithCurrentFactCorrection(item.content, input.userText),
+  );
+  const groundedSelected = Object.fromEntries(
+    RECALL_ROUTES.map((route) => [
+      route,
+      groundingItems.filter((item) => item.routes.includes(route)).length,
+    ]),
+  ) as Record<RecallRoute, number>;
   let emotion: string | null = null;
   try {
     emotion = getEmotionState()?.mood ?? null;
@@ -169,20 +229,15 @@ export async function buildChatContext(input: {
     );
   }
   sections.push(modeInstruction(mode));
+  sections.push(conversationStrategyInstruction(conversationPolicy));
   sections.push(voiceExamplesForMode(mode));
   if (emotion) {
     sections.push(
       `用户近期的轻量情绪状态：${emotion}。这只是会自动过期的临时背景；本轮明确表达优先，不要据此给用户贴标签。`,
     );
   }
-  if (recall.items.length > 0) {
-    sections.push(
-      [
-        "以下背景已通过五路召回、跨路去重和统一排序；只在与当前话题有关时自然使用，不要逐条复述，也不要声称记得未列出的事实：",
-        ...recall.items.map((item) => `- ${item.content}`),
-      ].join("\n"),
-    );
-  }
+  // 始终注入 Grounding；没有命中时也必须明确“没有可用证据”，不能自由补全。
+  sections.push(buildMemoryGroundingSection(groundingItems));
   if (!ROBOT_SYSTEM_PROMPT.includes("不是语气范例")) {
     sections.push(
       "历史中的Home Robot 回复只代表已经发生过的对话，不是语气范例；若旧回复显得生硬，以当前要求为准。",
@@ -191,17 +246,24 @@ export async function buildChatContext(input: {
 
   return {
     system: sections.join("\n\n"),
+    groundingItems,
     messages: kept,
     debug: {
       mode,
-      memoryIds: recall.items.map((item) => item.id),
+      conversationMove: conversationPolicy.move,
+      threadState: conversationPolicy.threadState,
+      allowTopicSwitch: conversationPolicy.allowTopicSwitch,
+      longFormRequested: conversationPolicy.longFormRequested,
+      continuesPriorActiveThread:
+        conversationPolicy.continuesPriorActiveThread,
+      memoryIds: groundingItems.map((item) => item.id),
       contextTokens: usedTokens,
       usedSummary: Boolean(summary),
       directives,
       emotion,
       recallRoutes: {
         generated: recall.generated,
-        selected: recall.selected,
+        selected: groundedSelected,
       },
     },
   };

@@ -499,3 +499,41 @@
     margin-left: 14px;
   }
 }
+
+/* Moonlit paper component geometry */
+.shell {
+  border-radius: var(--radius-lg);
+}
+
+.header nav {
+  padding: 4px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: rgba(45, 39, 32, 0.028);
+}
+
+.header nav a,
+.header nav span {
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: var(--radius-xs);
+}
+
+.compose,
+.letter {
+  border-radius: var(--radius-md);
+}
+
+.compose input,
+.compose textarea,
+.replyBox textarea,
+.compose button,
+.replyBox button {
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+}
+
+.compose button:active:not(:disabled),
+.replyBox button:active:not(:disabled) {
+  transform: scale(0.97);
+}

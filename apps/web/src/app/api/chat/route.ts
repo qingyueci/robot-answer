@@ -12,7 +12,19 @@ import {
   toChineseModelError,
 } from "@/lib/model/provider";
 import { buildChatContext } from "@/lib/chat/context-builder";
-import { detectConversationMode, type ConversationMode } from "@/lib/chat/mode";
+import type { ConversationMode } from "@/lib/chat/mode";
+import {
+  bubbleLayoutInstruction,
+  maxOutputTokens,
+  shouldUseDeepThinkingForTurn,
+} from "@/lib/chat/conversation-policy";
+import { touchUserActivity } from "@/lib/companion/store";
+import { buildExplicitGroundedMemoryReply } from "@/lib/memory/grounding";
+import {
+  conflictsWithCurrentFactCorrection,
+  extractCurrentFactCorrection,
+  looksContradictory,
+} from "@/lib/governance/text";
 
 export const runtime = "nodejs";
 
@@ -22,23 +34,6 @@ function readText(message: UIMessage | undefined) {
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("");
-}
-
-function shouldUseDeepThinking(
-  mode: ConversationMode,
-  userText: string,
-  recentUserTexts: string[],
-) {
-  if (mode === "analysis") return true;
-
-  const nuanced =
-    /算了|没事|随便|都行|无所谓|你决定|其实|但是|可是|反话|隐喻|纠结|委屈|失望|在意|关系|误会|为什么|怎么办/;
-  if (mode === "advice") return userText.length >= 16 || nuanced.test(userText);
-  if (mode === "emotional") {
-    return nuanced.test(userText) || recentUserTexts.some((text) => nuanced.test(text));
-  }
-  if (mode === "factual") return userText.length >= 100;
-  return false;
 }
 
 function responseHeaders(input: {
@@ -54,21 +49,40 @@ function responseHeaders(input: {
   return headers;
 }
 
-function demoStream(messages: UIMessage[], mode: ConversationMode) {
-  const text = buildDemoResponse(readText(messages.at(-1)));
+function staticTextStream(input: {
+  messages: UIMessage[];
+  mode: ConversationMode;
+  text: string;
+  debug?: Record<string, unknown>;
+  messageMetadata?: Record<string, unknown>;
+}) {
   const stream = createUIMessageStream({
-    originalMessages: messages,
+    originalMessages: input.messages,
     execute({ writer }) {
       const id = crypto.randomUUID();
+      if (input.messageMetadata) {
+        writer.write({
+          type: "message-metadata",
+          messageMetadata: input.messageMetadata,
+        });
+      }
       writer.write({ type: "text-start", id });
-      writer.write({ type: "text-delta", id, delta: text });
+      writer.write({ type: "text-delta", id, delta: input.text });
       writer.write({ type: "text-end", id });
     },
   });
 
   return createUIMessageStreamResponse({
     stream,
-    headers: responseHeaders({ mode }),
+    headers: responseHeaders({ mode: input.mode, debug: input.debug }),
+  });
+}
+
+function demoStream(messages: UIMessage[], mode: ConversationMode) {
+  return staticTextStream({
+    messages,
+    mode,
+    text: buildDemoResponse(readText(messages.at(-1))),
   });
 }
 
@@ -91,13 +105,58 @@ export async function POST(request: Request) {
       ? body.conversationId.trim()
       : null;
   const userText = readText(messages.at(-1));
+  if (!userText.trim() || messages.at(-1)?.role !== "user") {
+    return Response.json(
+      { error: "最后一条消息必须是非空的用户消息" },
+      { status: 400 },
+    );
+  }
+
+  // 用户消息一到达服务端就刷新活动时钟；不要等模型生成或 post-turn 完成。
+  touchUserActivity();
   const recentUserTexts = messages
     .filter((message) => message.role === "user")
     .slice(-4, -1)
     .map(readText);
 
-  const mode = detectConversationMode(userText, recentUserTexts);
-  const deepThinking = shouldUseDeepThinking(mode, userText, recentUserTexts);
+  const ctx = await buildChatContext({ conversationId, messages, userText });
+  const mode = ctx.debug.mode;
+  const currentCorrection = extractCurrentFactCorrection(userText);
+  const groundedMemoryReply = buildExplicitGroundedMemoryReply(
+    userText,
+    ctx.groundingItems.filter(
+      (item) =>
+        !looksContradictory(item.content, userText) &&
+        !conflictsWithCurrentFactCorrection(item.content, userText),
+    ),
+    currentCorrection,
+  );
+  if (groundedMemoryReply) {
+    return staticTextStream({
+      messages,
+      mode,
+      text: groundedMemoryReply,
+      debug: {
+        mode,
+        grounding: "controlled-explicit-memory",
+        memoryIds: ctx.debug.memoryIds,
+        conversationMove: ctx.debug.conversationMove,
+        threadState: ctx.debug.threadState,
+      },
+      messageMetadata: {
+        bubbleLayout: "split",
+        conversationMove: ctx.debug.conversationMove,
+        threadState: ctx.debug.threadState,
+      },
+    });
+  }
+  const deepThinking = shouldUseDeepThinkingForTurn({
+    mode,
+    userText,
+    recentUserTexts,
+    threadState: ctx.debug.threadState,
+    continuesPriorActiveThread: ctx.debug.continuesPriorActiveThread,
+  });
   const handle = getChatModelHandle({
     thinking: deepThinking,
     reasoningEffort: "high",
@@ -111,10 +170,10 @@ export async function POST(request: Request) {
     AbortSignal.timeout(modelTimeoutMs()),
   ]);
 
-  const ctx = await buildChatContext({ conversationId, messages, userText });
-  const bubbleInstruction = deepThinking
-    ? "本轮是深度话题：把完整回应放在一个连续聊天气泡里，正文不要使用换行分段；需要停顿时用句号或分号。"
-    : "本轮按真人聊天节奏输出：每说完一个自然短句组就换一行，每一行会成为独立聊天气泡；通常 1 到 4 行，每行 1 到 2 句，不要使用空行。内容很短时不强行拆分。";
+  const bubbleInstruction = bubbleLayoutInstruction({
+    thinkingEnabled: deepThinking,
+    longFormRequested: ctx.debug.longFormRequested,
+  });
 
   const result = streamText({
     model: handle.model,
@@ -127,14 +186,20 @@ export async function POST(request: Request) {
       : handle.providerLabel === "kimi-code"
         ? 1
         : 0.8,
-    maxOutputTokens: handle.thinkingEnabled ? 3200 : 600,
+    // 这是容量上限，不是目标长度；普通短聊仍由 Conversation Move 控制简洁度。
+    maxOutputTokens: maxOutputTokens(handle.thinkingEnabled),
   });
 
   return result.toUIMessageStreamResponse({
     sendReasoning: true,
     messageMetadata: ({ part }) =>
       part.type === "start"
-        ? { bubbleLayout: deepThinking ? "single" : "split" }
+        ? {
+            bubbleLayout:
+              deepThinking || ctx.debug.longFormRequested ? "single" : "split",
+            conversationMove: ctx.debug.conversationMove,
+            threadState: ctx.debug.threadState,
+          }
         : undefined,
     headers: responseHeaders({
       mode: ctx.debug.mode,
@@ -149,6 +214,10 @@ export async function POST(request: Request) {
         directives: ctx.debug.directives,
         emotion: ctx.debug.emotion,
         recallRoutes: ctx.debug.recallRoutes,
+        conversationMove: ctx.debug.conversationMove,
+        threadState: ctx.debug.threadState,
+        continuesPriorActiveThread: ctx.debug.continuesPriorActiveThread,
+        maxOutputTokens: maxOutputTokens(handle.thinkingEnabled),
       },
     }),
     onError: (error) => toChineseModelError(error),
